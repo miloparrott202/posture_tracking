@@ -1,0 +1,142 @@
+# =============================================================================
+# Posture & Eye-Strain Tracker — user configuration
+# Edit values here; they are deep-merged over the built-in defaults in
+# core/config.py, so you only need to specify what you want to override.
+# =============================================================================
+
+camera:
+  index: 0                 # OpenCV camera index
+  # Capture/display resolution (also used for inference). 640x480 gives a crisp
+  # overlay with plenty of CPU headroom; drop to 320x240 on very weak machines.
+  width: 640
+  height: 480
+  crop_top_fraction: 1.0   # set e.g. 0.6 to crop to top 60% if cam is above monitor
+  mirror: true             # selfie view so on-screen left/right match your body
+
+framerate:
+  background_fps: 3        # 2-4 fps when minimised (RAM/CPU budget, Section 3)
+  full_fps: 30             # 15-30 fps in full-screen correction mode
+
+models:
+  # Lite variant keeps idle RAM low (Section 3). Files are auto-downloaded
+  # into ./models on first run.
+  pose_task: "pose_landmarker_lite.task"
+  face_task: "face_landmarker.task"
+
+posture:
+  # Penalty weights per feature (slouch + craning carry the most; asymmetry less).
+  weights:
+    fha: 1.6
+    forward_head: 120.0     # craning + head jutting forward as the back rounds
+    neck_ratio: 230.0       # spinal collapse — the main slouch signal
+    torso_incline: 2.0
+    head_drop: 180.0        # head dropping in the frame (lower weight than spine)
+    head_pitch: 1.3         # head tilt — low weight so glancing down isn't a slump
+    shoulder_tilt: 1.3
+    head_roll: 1.1
+    head_lateral: 45.0
+  # Score → state thresholds (Section 4.4)
+  thresholds:
+    good: 85               # >= good          -> green
+    drifting: 60           # >= drifting      -> yellow, else red
+  # Deadband: deviations within these tolerances incur NO penalty (stops the
+  # score jittering / reading low for normal sub-degree wobble).
+  tolerances:
+    fha_deg: 5.0
+    forward_head: 0.04
+    neck_ratio: 0.04
+    torso_incline_deg: 6.0
+    head_drop: 0.035
+    head_pitch_deg: 9.0
+    shoulder_tilt_deg: 4.0
+    head_roll_deg: 5.0
+    head_lateral: 0.05
+  # Temporal EMA smoothing of metrics fed to scoring (0 = off, higher = smoother
+  # but laggier). Reduces frame-to-frame jitter in the score/readouts.
+  smoothing: 0.6
+
+blink:
+  ear_threshold: 0.20      # EAR below this counts as eye-closed (Section 5.1)
+  consec_frames: 2         # frames below threshold to register one blink
+  window_seconds: 60       # rolling window for blinks/minute
+  low_rate_threshold: 10   # blinks/min below this = strain indicator
+  low_rate_sustain_sec: 300  # must be low for 5 min before reminder
+
+gaze:
+  yaw_threshold_deg: 25    # |head yaw| above this -> looking away
+  pitch_threshold_deg: 20  # |head pitch| above this -> looking away
+  iris_extreme_ratio: 0.30 # iris within this fraction of an eye corner -> away
+
+breaks:
+  # 20-20-20 rule (Section 5.3)
+  screen_interval_sec: 1200   # 20 min continuous look -> break reminder
+  look_away_reset_sec: 20     # looking away this long resets the timer
+  away_pause_sec: 30          # no face this long -> pause timers (user away)
+
+breathing:
+  # Periodic diaphragmatic-breathing reminder + EXPERIMENTAL chest-breathing
+  # detection from shoulder motion (full mode only — needs the higher frame
+  # rate). The camera can't see your belly, so it positively detects *chest*
+  # breathing and infers "relaxed" from quiet shoulders.
+  enabled: true
+  reminder_interval_sec: 1800   # nudge to breathe into your belly every 30 min
+  window_sec: 30                # rolling analysis window for rate/amplitude
+  min_fps: 5                    # below this effective sample rate -> no detection
+  rate_min_bpm: 6               # plausible breathing-rate band (breaths/min)
+  rate_max_bpm: 30
+  chest_amp_threshold: 0.02     # norm. shoulder RMS above this = chest breathing
+  min_concentration: 0.25       # how periodic the signal must be to be trusted
+  chest_sustain_sec: 25         # chest breathing this long -> escalate the reminder
+
+notifications:
+  # Minimum seconds between notifications of the SAME type (anti-fatigue).
+  rate_limit_sec:
+    break: 1200
+    posture: 300
+    blink: 600
+    breathing_chest: 600
+  posture_sustain_sec: 15     # poor posture must persist this long before notifying
+  backend: "auto"             # auto | plyer | osascript
+  sound: false                # keep alerts non-distracting (silent OS banners)
+
+reminders:
+  # Master switch + per-type toggles (also available in the app window and the
+  # menu-bar/tray menu). Notifications fire while minimised to the tray.
+  enabled: true
+  posture: true               # "sit up tall" / "ease your head back"
+  blink: true                 # low blink-rate (eye strain) nudges
+  break: true                 # 20-20-20 screen-break nudges
+
+health_log:
+  enabled: true
+  path: "posture_health_log.jsonl"
+  interval_sec: 300           # write a summary record every 5 min (Section 11)
+
+diagnostics:
+  # One-time, first-use check that warns if the hardware looks insufficient.
+  enabled: true
+  warmup_sec: 5               # measure throughput this long before judging
+  min_fps: 10                 # achieved processing fps below this -> warn
+  min_cpu_cores: 2
+  min_camera_width: 320       # native camera resolution below this -> warn
+  min_camera_height: 240
+  min_frames_for_perf: 15
+
+recovery:
+  # Recovery after the laptop sleeps/wakes (camera handle goes stale).
+  sleep_resume_gap_sec: 20      # frame-gap this long => assume sleep/wake
+  camera_fail_threshold: 30     # failed reads before auto re-opening the camera
+  recalibrate_on_resume: true   # auto re-record baseline after a camera restart
+  recalibration_duration_sec: 5 # length of the auto post-resume recalibration
+  inference_error_threshold: 10 # inference errors before rebuilding the engines
+
+imu:
+  enabled: false
+  connection: "serial"        # serial | ble
+  port: "/dev/cu.usbmodem14201"
+  baud: 115200
+  # BLE settings (only used when connection == ble)
+  ble_address: ""             # device MAC/UUID
+  ble_char_uuid: ""           # notify characteristic UUID
+  fusion_weight: 0.6          # trust in IMU vs camera for head tilt (0..1)
+  format: "json"             # json | csv  (csv = "pitch,roll,yaw,ts")

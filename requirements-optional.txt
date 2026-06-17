@@ -1,0 +1,9 @@
+# Optional extras — install only if you need them:
+#   .venv/bin/pip install -r requirements-optional.txt
+#
+# IMU bridge (Section 8): enable imu.enabled in config.yaml after installing.
+pyserial>=3.5           # USB / serial IMU
+bleak>=0.22.0           # BLE IMU
+
+# Native macOS menu-bar alternative to pystray (macOS only).
+rumps>=0.4.0

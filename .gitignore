@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# App data
+models/*.task
+baseline.json
+settings.json
+posture_health_log.jsonl
+screenshots/
+watch_last.log
+*.log
+
+# Packaging
+build/
+dist/
+*.spec.bak
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

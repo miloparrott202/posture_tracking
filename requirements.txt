@@ -1,0 +1,18 @@
+# Core dependencies — everything the app needs for camera, webcam vision,
+# scoring, the full-screen GUI, and the background tray + notifications.
+# Optional extras (IMU support, native macOS menu bar) live in
+# requirements-optional.txt so the default one-command install stays lean.
+
+# Vision + math
+opencv-python>=4.9.0
+mediapipe>=0.10.14
+numpy>=1.26.0
+pyyaml>=6.0
+
+# Full-screen GUI + system tray
+PyQt6>=6.6.0
+
+# Standalone (GUI-free) background tray mode + notifications
+pystray>=0.19.5
+plyer>=2.1.0
+Pillow>=10.0.0          # pystray renders the tray icon via Pillow
