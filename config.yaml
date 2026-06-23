@@ -26,8 +26,8 @@ models:
 posture:
   # Penalty weights per feature (slouch + craning carry the most; asymmetry less).
   weights:
-    fha: 1.6
-    forward_head: 120.0     # craning + head jutting forward as the back rounds
+    fha: 3.2                # forward-head angle — strong penalty for leaning in
+    forward_head: 185.0     # head jutting toward the screen (z-depth)
     neck_ratio: 230.0       # spinal collapse — the main slouch signal
     torso_incline: 2.0
     head_drop: 180.0        # head dropping in the frame (lower weight than spine)
@@ -88,6 +88,23 @@ breathing:
   min_concentration: 0.25       # how periodic the signal must be to be trusted
   chest_sustain_sec: 25         # chest breathing this long -> escalate the reminder
 
+near_work:
+  # Screen-distance + chin-jut tracking, tuned for convergence insufficiency /
+  # post-concussion vision syndrome (symptoms scale with closeness + duration).
+  enabled: true
+  baseline_distance_cm: 60.0    # assumed comfortable distance at calibration (approx)
+  lean_in_ratio: 1.15           # face this much bigger than baseline = leaning in
+  lean_sustain_sec: 20          # sustained lean before the "sit back" nudge
+  min_baseline_face_width: 0.02
+  # Convergence-aware break engine: how fast the look-away budget fills.
+  closeness_weight: 1.5         # leaning in accelerates the break timer
+  low_blink_weight: 0.5         # low blink rate accelerates it too
+  chin_jut_budget_bump: 0.12    # each chin-jut adds this to the break budget
+  # Chin-jut detection (forward-head depth spike above a slow reference).
+  chin_jut_delta: 0.05
+  chin_jut_cooldown_sec: 8
+  chin_jut_ref_tau_sec: 4.0
+
 notifications:
   # Minimum seconds between notifications of the SAME type (anti-fatigue).
   rate_limit_sec:
@@ -95,6 +112,8 @@ notifications:
     posture: 300
     blink: 600
     breathing_chest: 600
+    near_distance: 300
+    chin_jut: 300
   posture_sustain_sec: 15     # poor posture must persist this long before notifying
   backend: "auto"             # auto | plyer | osascript
   sound: false                # keep alerts non-distracting (silent OS banners)
@@ -106,6 +125,8 @@ reminders:
   posture: true               # "sit up tall" / "ease your head back"
   blink: true                 # low blink-rate (eye strain) nudges
   break: true                 # 20-20-20 screen-break nudges
+  near_distance: true         # "sit back from the screen" lean-in nudges
+  chin_jut: true              # chin-jut eye-strain early warning
 
 health_log:
   enabled: true

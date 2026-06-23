@@ -1,22 +1,28 @@
 """OpenCV overlay for the full-screen view (Section 6.2).
 
-Drawn on the BGR frame before it reaches Qt. Renders the posture skeleton
-(face points, ears, neck/spine line, shoulder line, torso line when hips are
-visible), coloured by which problem group is worst, plus a compact score badge
-and a correction cue — so a single frame reads on its own.
+Drawn on the BGR frame before it reaches Qt. A clean, subtle posture rig: a
+faint face constellation, thin neck/spine + shoulder + torso lines and small
+joint dots, coloured by which problem group is worst, plus a compact score
+badge and a correction cue.
+
+Kept deliberately low-key — every stroke gets a thin dark casing so it stays
+legible over a busy webcam image without resorting to glow.
 """
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
 
-GREEN = (0, 200, 0)
-RED = (40, 40, 255)
+# Calm, semantic palette (BGR).
+GOOD = (120, 200, 110)      # green
+DRIFT = (40, 190, 230)      # amber
+BAD = (70, 70, 220)         # red
+FACE = (155, 150, 145)      # neutral grey for the face constellation
+WHITE = (235, 235, 235)
 AMBER = (0, 200, 255)
-WHITE = (245, 245, 245)
-GREY = (170, 170, 170)
+CASING = (20, 20, 20)       # thin dark outline under strokes
 DARK = (32, 28, 26)
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 AA = cv2.LINE_AA
@@ -33,6 +39,18 @@ def _panel(frame, x1, y1, x2, y2, alpha=0.55) -> None:
         return
     sub = frame[y1:y2, x1:x2]
     cv2.addWeighted(np.full_like(sub, DARK), alpha, sub, 1 - alpha, 0, sub)
+
+
+def _link(frame, a, b, color, thick=2) -> None:
+    cv2.line(frame, a, b, CASING, thick + 2, AA)   # dark casing for contrast
+    cv2.line(frame, a, b, color, thick, AA)
+
+
+def _node(frame, c, color, r, worst=False) -> None:
+    cv2.circle(frame, c, r + 1, CASING, -1, AA)     # casing
+    cv2.circle(frame, c, r, color, -1, AA)          # core
+    if worst:                                       # subtle ring on the flagged joint
+        cv2.circle(frame, c, r + 3, color, 1, AA)
 
 
 def draw_overlay(frame: np.ndarray, frame_result) -> np.ndarray:
@@ -55,28 +73,32 @@ def draw_overlay(frame: np.ndarray, frame_result) -> np.ndarray:
 
     def gcolor(group: str) -> Tuple[int, int, int]:
         if score.level == "good":
-            return GREEN
-        return RED if group == worst else AMBER
+            return GOOD
+        return BAD if group == worst else DRIFT
 
     p = {k: _px(v, w, h) for k, v in lm.items() if not k.startswith("_")}
+    hips = lm.get("_hips_valid", (0, 0))[0] > 0.5
+
+    # --- face constellation (subtle, behind everything) --------------------
+    for a, b in _face_links(p):
+        cv2.line(frame, a, b, FACE, 1, AA)
+    for k in ("left_eye", "right_eye", "nose", "mouth_left", "mouth_right"):
+        if k in p:
+            cv2.circle(frame, p[k], 2, WHITE, -1, AA)
 
     # --- skeleton ----------------------------------------------------------
-    if lm.get("_hips_valid", (0, 0))[0] > 0.5:                      # torso (slouch)
-        cv2.line(frame, p["hip_mid"], p["shoulder_mid"], gcolor("slouch"), 3, AA)
+    if hips:                                                         # torso (slouch)
+        _link(frame, p["hip_mid"], p["shoulder_mid"], gcolor("slouch"))
         for pt in (p["left_hip"], p["right_hip"]):
-            cv2.circle(frame, pt, 5, gcolor("slouch"), -1, AA)
-    cv2.line(frame, p["left_shoulder"], p["right_shoulder"], gcolor("asym"), 3, AA)
-    cv2.line(frame, p["shoulder_mid"], p["ear_mid"], gcolor("crane"), 3, AA)
+            _node(frame, pt, gcolor("slouch"), 4, worst == "slouch")
+    _link(frame, p["left_shoulder"], p["right_shoulder"], gcolor("asym"))
+    _link(frame, p["shoulder_mid"], p["ear_mid"], gcolor("crane"))
 
     for pt in (p["left_shoulder"], p["right_shoulder"]):
-        cv2.circle(frame, pt, 7, gcolor("asym"), -1, AA)
-        cv2.circle(frame, pt, 7, DARK, 1, AA)
+        _node(frame, pt, gcolor("asym"), 5, worst == "asym")
     for pt in (p["left_ear"], p["right_ear"]):
-        cv2.circle(frame, pt, 6, gcolor("crane"), -1, AA)
-    for key in ("left_eye", "right_eye", "nose", "mouth_left", "mouth_right"):
-        if key in p:
-            cv2.circle(frame, p[key], 3, WHITE, -1, AA)
-    cv2.circle(frame, p["shoulder_mid"], 4, WHITE, -1, AA)
+        _node(frame, pt, gcolor("crane"), 4, worst == "crane")
+    _node(frame, p["shoulder_mid"], WHITE, 3)
 
     if score.needs_correction:
         _draw_correction_arrow(frame, p, worst)
@@ -88,6 +110,27 @@ def draw_overlay(frame: np.ndarray, frame_result) -> np.ndarray:
                     FONT, 0.55, AMBER, 1, AA)
     _draw_cue(frame, score)
     return frame
+
+
+# ----------------------------------------------------------------------
+def _face_links(p: Dict[str, Tuple[int, int]]) -> List[Tuple]:
+    """Minimal eye/nose/mouth rig, only for landmarks that are present."""
+    pairs = [("left_eye", "right_eye"), ("left_eye", "nose"), ("right_eye", "nose"),
+             ("nose", "mouth_left"), ("nose", "mouth_right"),
+             ("mouth_left", "mouth_right")]
+    return [(p[a], p[b]) for a, b in pairs if a in p and b in p]
+
+
+def _draw_correction_arrow(frame, p, worst) -> None:
+    ear_mid, sh_mid = p["ear_mid"], p["shoulder_mid"]
+    if worst == "slouch":
+        base, tip = sh_mid, (sh_mid[0], sh_mid[1] - 56)            # sit up
+    elif worst == "crane":
+        base, tip = ear_mid, (ear_mid[0] - 44, ear_mid[1] - 28)   # head back
+    else:
+        base, tip = ear_mid, (ear_mid[0], ear_mid[1] - 44)
+    cv2.arrowedLine(frame, base, tip, CASING, 4, AA, tipLength=0.38)
+    cv2.arrowedLine(frame, base, tip, BAD, 2, AA, tipLength=0.38)
 
 
 def _draw_badge(frame, score) -> None:
@@ -104,17 +147,3 @@ def _draw_cue(frame, score) -> None:
     color = WHITE if score.level == "drifting" else (60, 60, 255)
     text = score.correction_text.encode("ascii", "ignore").decode()  # cv2 is ASCII-only
     cv2.putText(frame, text, (16, h - 15), FONT, 0.6, color, 2, AA)
-
-
-def _draw_correction_arrow(frame, p, worst) -> None:
-    ear_mid, sh_mid = p["ear_mid"], p["shoulder_mid"]
-    if worst == "slouch":
-        base = sh_mid
-        tip = (sh_mid[0], sh_mid[1] - 60)                  # sit up
-    elif worst == "crane":
-        base = ear_mid
-        tip = (ear_mid[0] - 46, ear_mid[1] - 30)           # head back
-    else:
-        base = ear_mid
-        tip = (ear_mid[0], ear_mid[1] - 46)
-    cv2.arrowedLine(frame, base, tip, (60, 60, 255), 3, AA, tipLength=0.35)

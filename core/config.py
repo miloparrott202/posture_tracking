@@ -35,7 +35,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "weights": {
             # z-depth (forward_head) is noisier, so it supports rather than
             # drives; reliable 2D signals (fha, neck_ratio, head_drop) carry it.
-            "fha": 1.6, "forward_head": 120.0,           # craning + head jutting forward
+            "fha": 3.2, "forward_head": 185.0,           # craning + head jutting forward
             # slouch: spinal collapse (neck_ratio) carries the most weight; head
             # tilt/drop matter less so simply glancing at the bottom of the
             # monitor doesn't read as a slump.
@@ -88,9 +88,27 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "min_concentration": 0.25,       # spectral concentration to trust a rhythm
         "chest_sustain_sec": 25,         # chest breathing this long -> escalate reminder
     },
+    # Near-work / vision-strain tracking (screen distance + chin-jut),
+    # tuned for convergence insufficiency / post-concussion vision syndrome.
+    "near_work": {
+        "enabled": True,
+        "baseline_distance_cm": 60.0,   # assumed comfy distance at calibration (approx)
+        "lean_in_ratio": 1.15,          # face this much bigger than baseline = leaning in
+        "lean_sustain_sec": 20,         # sustained lean before nudging "sit back"
+        "min_baseline_face_width": 0.02,
+        # Convergence-aware break engine: how fast the look-away budget fills.
+        "closeness_weight": 1.5,        # leaning in accelerates the break timer
+        "low_blink_weight": 0.5,        # low blink rate accelerates it too
+        "chin_jut_budget_bump": 0.12,   # each chin-jut adds this to the break budget
+        # Chin-jut detection (forward-head depth spike above a slow reference).
+        "chin_jut_delta": 0.05,
+        "chin_jut_cooldown_sec": 8,
+        "chin_jut_ref_tau_sec": 4.0,
+    },
     "notifications": {
         "rate_limit_sec": {"break": 1200, "posture": 300, "blink": 600,
-                           "breathing_chest": 600},
+                           "breathing_chest": 600, "near_distance": 300,
+                           "chin_jut": 300},
         "posture_sustain_sec": 15,
         "backend": "auto",
         "sound": False,           # keep alerts non-distracting: silent banners only
@@ -101,6 +119,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "posture": True,          # "sit up / ease your head back" nudges
         "blink": True,            # low blink-rate (eye strain) nudges
         "break": True,            # 20-20-20 screen-break nudges
+        "near_distance": True,    # "sit back from the screen" lean-in nudges
+        "chin_jut": True,         # chin-jut eye-strain early warning
     },
     "health_log": {
         "enabled": True,

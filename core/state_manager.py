@@ -44,6 +44,11 @@ class Snapshot:
     pct_good: float = 0.0                 # % of scored time in each posture band
     pct_drifting: float = 0.0
     pct_poor: float = 0.0
+    # Near-work / vision strain.
+    viewing_distance_cm: float = 0.0      # rough screen distance (0 = unknown)
+    distance_ratio: float = 1.0           # >1 farther than baseline, <1 closer
+    lean_in: bool = False                 # currently leaning toward the screen
+    strain_budget: float = 0.0            # 0..1 convergence-aware break budget
 
 
 class StateManager:
@@ -58,12 +63,19 @@ class StateManager:
         self._level_times: Dict[str, float] = {"good": 0.0, "drifting": 0.0, "poor": 0.0}
         self._last_stat_t = self._start
 
-        # Screen-time / break tracking (20-20-20).
+        # Screen-time / break tracking (20-20-20), now a convergence-aware
+        # "strain budget" (0..1) that fills faster when leaning in / blinking
+        # little (see _update_break_timer).
         self._screen_start: Optional[float] = None
         self._last_on_screen: float = self._start
         self._away_since: Optional[float] = None
         self._no_face_since: Optional[float] = None
         self._breaks_taken = 0
+        self._strain_budget = 0.0
+        self._fill_multiplier = 1.0       # last break-fill rate multiplier (for ETA)
+
+        # Near-work: sustained lean-in tracking for the "sit back" nudge.
+        self._lean_since: Optional[float] = None
 
         # Poor-posture debounce.
         self._poor_since: Optional[float] = None
@@ -88,6 +100,8 @@ class StateManager:
                 self._screen_start = None
                 self._poor_since = None
                 self._chest_since = None
+                self._strain_budget = 0.0
+                self._lean_since = None
 
     @property
     def paused(self) -> bool:
@@ -99,7 +113,7 @@ class StateManager:
 
     # ------------------------------------------------------------------
     def update(self, pose_metrics, face_metrics, score: ScoreResult,
-               breathing=None, now: Optional[float] = None) -> List[Event]:
+               breathing=None, near_work=None, now: Optional[float] = None) -> List[Event]:
         """Advance timers with the latest frame metrics; return due events."""
         now = time.monotonic() if now is None else now
         events: List[Event] = []
@@ -112,7 +126,8 @@ class StateManager:
             if self._paused:
                 self._snapshot = self._build_snapshot(score, face_metrics,
                                                        pose_metrics, now,
-                                                       breathing=breathing)
+                                                       breathing=breathing,
+                                                       near_work=near_work)
                 return events
 
             face_detected = bool(face_metrics and face_metrics.detected)
@@ -129,9 +144,11 @@ class StateManager:
                     self._poor_since = None
                     self._low_blink_since = None
                     self._chest_since = None
+                    self._lean_since = None
                     self._snapshot = self._build_snapshot(score, face_metrics,
                                                           pose_metrics, now,
-                                                          breathing=breathing)
+                                                          breathing=breathing,
+                                                          near_work=near_work)
                     return events
             else:
                 self._no_face_since = None
@@ -143,42 +160,103 @@ class StateManager:
                     and score.level in self._level_times:
                 self._level_times[score.level] += dt
 
-            events += self._update_break_timer(on_screen, now)
+            events += self._update_break_timer(on_screen, near_work, blink_rate, dt, now)
             events += self._update_posture(score, now)
             events += self._update_blink(blink_rate, on_screen, now)
             events += self._update_breathing(breathing, now)
+            events += self._update_near_work(near_work, on_screen, now)
             events = self._apply_reminder_toggles(events)
 
             self._snapshot = self._build_snapshot(score, face_metrics,
                                                   pose_metrics, now,
                                                   gaze_on_screen=on_screen,
-                                                  breathing=breathing)
+                                                  breathing=breathing,
+                                                  near_work=near_work)
         return events
 
     # ------------------------------------------------------------------
-    def _update_break_timer(self, on_screen: bool, now: float) -> List[Event]:
+    def _update_break_timer(self, on_screen: bool, near_work, blink_rate: float,
+                            dt: float, now: float) -> List[Event]:
+        """Convergence-aware 20-20-20: a strain budget that fills faster the
+        closer you sit and the less you blink, plus a bump on each chin-jut."""
         b = self.cfg["breaks"]
+        nw = self.cfg.get("near_work", {})
         events: List[Event] = []
         if on_screen:
             self._last_on_screen = now
             self._away_since = None
             if self._screen_start is None:
                 self._screen_start = now
-            elapsed = now - self._screen_start
-            if elapsed >= b["screen_interval_sec"] and self._rate_ok("break", now):
+
+            # Fill-rate multiplier: 1.0 at the calibrated distance with normal
+            # blink, rising with closeness and low blink rate.
+            mult = 1.0
+            if near_work is not None and near_work.valid and near_work.closeness_pct > 0:
+                mult += nw.get("closeness_weight", 1.5) * (near_work.closeness_pct / 100.0)
+            low = self.cfg["blink"]["low_rate_threshold"]
+            if 0 < blink_rate < low:
+                mult += nw.get("low_blink_weight", 0.5) * (1.0 - blink_rate / low)
+            self._fill_multiplier = mult
+
+            interval = max(1.0, b["screen_interval_sec"])
+            self._strain_budget += dt * mult / interval
+            # A chin-jut is a discrete strain spike -> bump the budget.
+            if near_work is not None and near_work.chin_jut:
+                self._strain_budget += nw.get("chin_jut_budget_bump", 0.12)
+            self._strain_budget = min(1.0, self._strain_budget)
+
+            if self._strain_budget >= 1.0 and self._rate_ok("break", now):
                 events.append(Event(
                     "break",
                     "Time to look away",
-                    "Focus on something ~20ft away for 20 seconds (20-20-20).",
+                    "Focus on something ~20ft away for 20 seconds — relaxes your "
+                    "convergence (20-20-20).",
                 ))
                 self._breaks_taken += 1
-                self._screen_start = now  # restart the interval
+                self._strain_budget = 0.0
+                self._screen_start = now
         else:
             if self._away_since is None:
                 self._away_since = now
-            # Reset the continuous timer once away long enough.
+            # Looking away long enough rests the eyes -> reset the budget.
             if now - self._away_since >= b["look_away_reset_sec"]:
                 self._screen_start = None
+                self._strain_budget = 0.0
+        return events
+
+    def _update_near_work(self, near_work, on_screen: bool, now: float) -> List[Event]:
+        """Lean-in 'sit back' nudge + chin-jut eye-strain early warning."""
+        events: List[Event] = []
+        if near_work is None:
+            self._lean_since = None
+            return events
+        nw = self.cfg.get("near_work", {})
+
+        # 1) Sustained lean toward the screen.
+        if on_screen and near_work.valid and near_work.lean_in:
+            if self._lean_since is None:
+                self._lean_since = now
+            if (now - self._lean_since) >= nw.get("lean_sustain_sec", 20) \
+                    and self._rate_ok("near_distance", now):
+                dist = (f" (~{near_work.distance_cm:.0f}cm)"
+                        if near_work.distance_cm else "")
+                events.append(Event(
+                    "near_distance",
+                    "Sit back from the screen",
+                    f"You've leaned in{dist} — closer screens strain your eyes "
+                    "more. Ease back to a comfortable distance.",
+                ))
+        else:
+            self._lean_since = None
+
+        # 2) Chin-jut: transient head-toward-screen lunge = eye-strain tell.
+        if on_screen and near_work.chin_jut and self._rate_ok("chin_jut", now):
+            events.append(Event(
+                "chin_jut",
+                "Eye strain?",
+                "You're jutting your chin toward the screen — a sign your eyes "
+                "are straining. Look away and palm them for a moment.",
+            ))
         return events
 
     def _update_posture(self, score: ScoreResult, now: float) -> List[Event]:
@@ -220,7 +298,8 @@ class StateManager:
         if not rem.get("enabled", True):
             return []
         # breathing has no dedicated sub-toggle -> governed by the master switch.
-        sub = {"break": "break", "posture": "posture", "blink": "blink"}
+        sub = {"break": "break", "posture": "posture", "blink": "blink",
+               "near_distance": "near_distance", "chin_jut": "chin_jut"}
         return [e for e in events if rem.get(sub.get(e.type, ""), True)]
 
     def _update_breathing(self, breathing, now: float) -> List[Event]:
@@ -271,14 +350,14 @@ class StateManager:
         return False
 
     def _build_snapshot(self, score, face_metrics, pose_metrics, now,
-                        gaze_on_screen: bool = False, breathing=None) -> Snapshot:
+                        gaze_on_screen: bool = False, breathing=None,
+                        near_work=None) -> Snapshot:
         b = self.cfg["breaks"]
-        if self._screen_start is not None:
-            cont = now - self._screen_start
-            to_break = max(0.0, b["screen_interval_sec"] - cont)
-        else:
-            cont = 0.0
-            to_break = b["screen_interval_sec"]
+        cont = now - self._screen_start if self._screen_start is not None else 0.0
+        # Estimated time to the next break from the remaining strain budget at
+        # the current fill rate (convergence-aware, not a fixed countdown).
+        rate = self._fill_multiplier / max(1.0, b["screen_interval_sec"])
+        to_break = (1.0 - self._strain_budget) / rate if rate > 0 else b["screen_interval_sec"]
         total = sum(self._level_times.values())
         if total > 0:
             pct_good = 100.0 * self._level_times["good"] / total
@@ -302,4 +381,9 @@ class StateManager:
             pct_good=round(pct_good, 1),
             pct_drifting=round(pct_drifting, 1),
             pct_poor=round(pct_poor, 1),
+            viewing_distance_cm=round(near_work.distance_cm, 0)
+                if (near_work and near_work.valid and near_work.distance_cm) else 0.0,
+            distance_ratio=near_work.distance_ratio if (near_work and near_work.valid) else 1.0,
+            lean_in=bool(near_work.lean_in) if (near_work and near_work.valid) else False,
+            strain_budget=round(self._strain_budget, 3),
         )

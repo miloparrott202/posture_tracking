@@ -18,6 +18,7 @@ import numpy as np
 from .breathing import BreathingEstimator, BreathingMetrics
 from .calibration import compute_baseline
 from .capture import Camera
+from .near_work import NearWorkEstimator, NearWorkMetrics
 from .config import save_baseline
 from .face_engine import FaceEngine, FaceMetrics
 from .gaze import is_looking_at_screen
@@ -39,6 +40,7 @@ class FrameResult:
     score: Optional[ScoreResult] = None
     snapshot: Optional[Snapshot] = None
     breathing: Optional[BreathingMetrics] = None
+    near_work: Optional[NearWorkMetrics] = None
     gaze_on_screen: bool = True
     recalibrating: bool = False
 
@@ -69,6 +71,10 @@ class Processor:
         self.health = HealthLogger(cfg)
         self.breathing = (
             BreathingEstimator(cfg) if cfg["breathing"]["enabled"] else None
+        )
+        self.near_work = (
+            NearWorkEstimator(cfg) if cfg.get("near_work", {}).get("enabled", False)
+            else None
         )
 
         # Optional IMU bridge — lazy-loaded only when enabled (Section 3/8).
@@ -145,9 +151,11 @@ class Processor:
 
         now = time.monotonic()
         breath_m = self.breathing.update(pose_m, now) if self.breathing else None
+        near_m = self.near_work.update(pose_m, self.baseline, now) if self.near_work else None
 
         score = compute_score(pose_m, face_m, self.baseline, self.cfg, fused)
-        events = self.state.update(pose_m, face_m, score, breathing=breath_m, now=now)
+        events = self.state.update(pose_m, face_m, score, breathing=breath_m,
+                                   near_work=near_m, now=now)
         snap = self.state.snapshot()
         self.health.observe(snap)
 
@@ -156,7 +164,7 @@ class Processor:
 
         result = FrameResult(
             frame=frame, pose=pose_m, face=face_m, score=score, snapshot=snap,
-            breathing=breath_m,
+            breathing=breath_m, near_work=near_m,
             gaze_on_screen=is_looking_at_screen(face_m, self.cfg) if face_m else False,
             recalibrating=self.recalibrating,
         )
@@ -352,7 +360,7 @@ class Processor:
 
         pose_keys = ("fha_deg", "forward_head", "neck_ratio", "torso_incline_deg",
                      "shoulder_tilt_deg", "head_roll_deg", "head_lateral",
-                     "ear_mid_y_norm")
+                     "ear_mid_y_norm", "face_width")
         if pose_m is not None and pose_m.detected:
             for k in pose_keys:
                 ema(pose_m, k)

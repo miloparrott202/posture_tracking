@@ -72,10 +72,13 @@ SCRIPT = {
 class FakeCamera:
     def __init__(self):
         self._f = np.full((480, 640, 3), (44, 40, 38), np.uint8)
+        self.reopen_count = 0          # recovery/watchdog bookkeeping
 
     def start(self): return self
     def read(self): return self._f.copy(), 1
     def stop(self): pass
+    def is_healthy(self): return True
+    def force_reopen(self): pass
 
 
 class FakePose:

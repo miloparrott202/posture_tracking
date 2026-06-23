@@ -160,7 +160,8 @@ class FullView(QMainWindow):
 
         self.blink_label = QLabel("Blink rate —")
         self.break_label = QLabel("Next break —:—")
-        for lbl in (self.blink_label, self.break_label):
+        self.dist_label = QLabel("Screen distance —")
+        for lbl in (self.blink_label, self.break_label, self.dist_label):
             lbl.setStyleSheet("color:#cfd2d6; font-size:14px;")
 
         # --- reminder toggles (mirrored in the tray menu) ----------------
@@ -174,6 +175,8 @@ class FullView(QMainWindow):
         self._chk_posture = self._make_check("posture", "  Posture", rem)
         self._chk_blink = self._make_check("blink", "  Low blink rate", rem)
         self._chk_break = self._make_check("break", "  Screen breaks", rem)
+        self._chk_near = self._make_check("near_distance", "  Screen distance", rem)
+        self._chk_jut = self._make_check("chin_jut", "  Eye strain (chin-jut)", rem)
 
         # --- timing thresholds (seconds/minutes), applied live --------------
         self.timing_header = QLabel("Timing")
@@ -224,9 +227,11 @@ class FullView(QMainWindow):
         sidebar.addWidget(self._divider())
         sidebar.addWidget(self.blink_label)
         sidebar.addWidget(self.break_label)
+        sidebar.addWidget(self.dist_label)
         sidebar.addWidget(self._divider())
         sidebar.addWidget(self.reminders_header)
-        for c in (self._chk_master, self._chk_posture, self._chk_blink, self._chk_break):
+        for c in (self._chk_master, self._chk_posture, self._chk_blink, self._chk_break,
+                  self._chk_near, self._chk_jut):
             sidebar.addWidget(c)
         sidebar.addWidget(self._divider())
         sidebar.addWidget(self.timing_header)
@@ -385,7 +390,9 @@ class FullView(QMainWindow):
 
         rem_menu = menu.addMenu("Reminders")
         for key, label in (("enabled", "Enable reminders"), ("posture", "Posture"),
-                           ("blink", "Low blink rate"), ("break", "Screen breaks")):
+                           ("blink", "Low blink rate"), ("break", "Screen breaks"),
+                           ("near_distance", "Screen distance"),
+                           ("chin_jut", "Eye strain (chin-jut)")):
             act = QAction(label, self, checkable=True)
             act.setChecked(bool(self.cfg.get("reminders", {}).get(key, True)))
             act.toggled.connect(lambda checked, k=key: self._set_reminder(k, checked))
@@ -466,6 +473,17 @@ class FullView(QMainWindow):
         self.blink_label.setStyleSheet(
             f"color:{AMBER if warn else '#cfd2d6'}; font-size:14px;")
         self.break_label.setText(f"Next break {_fmt_mmss(snap.seconds_to_break)}")
+
+        # Screen distance + lean-in (only meaningful once calibrated).
+        if snap.viewing_distance_cm > 0:
+            self.dist_label.setText(
+                f"Screen distance ~{snap.viewing_distance_cm:.0f}cm"
+                + ("  ⚠ leaning in" if snap.lean_in else ""))
+            self.dist_label.setStyleSheet(
+                f"color:{AMBER if snap.lean_in else '#cfd2d6'}; font-size:14px;")
+        else:
+            self.dist_label.setText("Screen distance —")
+            self.dist_label.setStyleSheet("color:#cfd2d6; font-size:14px;")
 
     def _update_tray(self, result) -> None:
         if self._tray is None or result.snapshot is None:
